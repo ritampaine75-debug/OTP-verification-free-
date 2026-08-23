@@ -30,7 +30,8 @@ export interface OtpRecord {
   resendCount: number;
 }
 
-export const localOtpStore = new Map<string, OtpRecord>();
+// In-memory fallback
+export const memoryOtpStore = new Map<string, OtpRecord>();
 
 export function hashOtp(otp: string): string {
   try {
@@ -41,7 +42,7 @@ export function hashOtp(otp: string): string {
 }
 
 export async function saveOtpToFirebase(record: OtpRecord): Promise<void> {
-  localOtpStore.set(record.verificationId, record);
+  memoryOtpStore.set(record.verificationId, record);
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 4000);
@@ -59,8 +60,8 @@ export async function saveOtpToFirebase(record: OtpRecord): Promise<void> {
 }
 
 export async function getOtpFromFirebase(verificationId: string): Promise<OtpRecord | null> {
-  if (localOtpStore.has(verificationId)) {
-    return localOtpStore.get(verificationId)!;
+  if (memoryOtpStore.has(verificationId)) {
+    return memoryOtpStore.get(verificationId)!;
   }
   try {
     const controller = new AbortController();
@@ -71,7 +72,7 @@ export async function getOtpFromFirebase(verificationId: string): Promise<OtpRec
     if (!res.ok) return null;
     const data = await res.json();
     if (data) {
-      localOtpStore.set(verificationId, data);
+      memoryOtpStore.set(verificationId, data);
       return data as OtpRecord;
     }
   } catch (err) {
@@ -81,7 +82,7 @@ export async function getOtpFromFirebase(verificationId: string): Promise<OtpRec
 }
 
 export async function deleteOtpFromFirebase(verificationId: string): Promise<void> {
-  localOtpStore.delete(verificationId);
+  memoryOtpStore.delete(verificationId);
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3000);
@@ -94,7 +95,7 @@ export async function deleteOtpFromFirebase(verificationId: string): Promise<voi
 }
 
 export async function updateOtpInFirebase(verificationId: string, updates: Partial<OtpRecord>): Promise<void> {
-  const existing = localOtpStore.get(verificationId);
+  const existing = memoryOtpStore.get(verificationId);
   if (existing) {
     Object.assign(existing, updates);
   }
@@ -116,9 +117,9 @@ export async function updateOtpInFirebase(verificationId: string, updates: Parti
 
 export async function invalidatePreviousOtpsForEmail(email: string): Promise<void> {
   const normalizedEmail = email.toLowerCase().trim();
-  for (const [id, rec] of localOtpStore.entries()) {
+  for (const [id, rec] of memoryOtpStore.entries()) {
     if (rec.email === normalizedEmail) {
-      localOtpStore.delete(id);
+      memoryOtpStore.delete(id);
       try {
         const url = `${FIREBASE_DATABASE_URL}/otpVerifications/${id}.json`;
         fetch(url, { method: 'DELETE' }).catch(() => {});
@@ -129,13 +130,34 @@ export async function invalidatePreviousOtpsForEmail(email: string): Promise<voi
   }
 }
 
-export function getMailTransporter() {
-  try {
-    const pass = process.env.GMAIL_APP_PASSWORD?.trim();
-    if (!pass) {
-      return null;
+export function parseIncomingBody(req: any): any {
+  if (!req) return {};
+  if (req.body) {
+    if (typeof req.body === 'object') return req.body;
+    if (typeof req.body === 'string') {
+      try {
+        return JSON.parse(req.body);
+      } catch {
+        return {};
+      }
     }
-    return nodemailer.createTransport({
+  }
+  return {};
+}
+
+export async function sendOtpEmail(toEmail: string, otp: string): Promise<{ sent: boolean; demoMode: boolean; error?: string }> {
+  const pass = process.env.GMAIL_APP_PASSWORD?.trim();
+
+  if (!pass) {
+    console.info(`[Demo Mode] No GMAIL_APP_PASSWORD set. Generated OTP: [${otp}] for ${toEmail}`);
+    return {
+      sent: true,
+      demoMode: true
+    };
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
         user: SENDER_GMAIL,
@@ -145,28 +167,6 @@ export function getMailTransporter() {
       greetingTimeout: 6000,
       socketTimeout: 8000
     });
-  } catch (err) {
-    console.warn('Error configuring SMTP transporter:', err);
-    return null;
-  }
-}
-
-export async function sendOtpEmail(toEmail: string, otp: string): Promise<{ sent: boolean; demoMode: boolean; error?: string }> {
-  const pass = process.env.GMAIL_APP_PASSWORD?.trim();
-
-  if (!pass) {
-    console.info(`[Demo Mode] Simulated Gmail Dispatch to ${toEmail}. Generated OTP: [${otp}]`);
-    return {
-      sent: true,
-      demoMode: true
-    };
-  }
-
-  try {
-    const transporter = getMailTransporter();
-    if (!transporter) {
-      return { sent: true, demoMode: true };
-    }
 
     await transporter.sendMail({
       from: `"Verification Security" <${SENDER_GMAIL}>`,
@@ -208,9 +208,14 @@ export async function sendOtpEmail(toEmail: string, otp: string): Promise<{ sent
         </html>
       `
     });
+
     return { sent: true, demoMode: false };
   } catch (err: any) {
-    console.error('Failed to send mail via SMTP (falling back gracefully):', err?.message || err);
-    return { sent: true, demoMode: true, error: err?.message || 'SMTP delivery failed' };
+    console.error('SMTP Delivery error (fallback to demo mode):', err?.message || err);
+    return {
+      sent: true,
+      demoMode: true,
+      error: err?.message || 'SMTP failed'
+    };
   }
 }
