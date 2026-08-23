@@ -1,0 +1,6 @@
+{
+  "name": "Gmail OTP Verification System",
+  "description": "Production-ready React + Firebase Realtime Database Gmail OTP verification system with secure server-side hashing, 5-minute expiration, and SMTP integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

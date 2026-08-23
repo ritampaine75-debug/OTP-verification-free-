@@ -1,0 +1,47 @@
+name: Deploy OTP Verification System
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Build React frontend
+        run: npm run build
+        env:
+          NODE_ENV: production
+
+      - name: Check Required Secrets
+        run: |
+          echo "Validating environment configuration..."
+          if [ -z "${{ secrets.FIREBASE_PROJECT_ID }}" ]; then
+            echo "::warning ::FIREBASE_PROJECT_ID secret is not set in GitHub Secrets. Using default project ID for build."
+          fi
+
+      - name: Deploy to Firebase (Hosting & Functions)
+        if: env.FIREBASE_TOKEN != '' || env.FIREBASE_SERVICE_ACCOUNT != ''
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: '${{ secrets.GITHUB_TOKEN }}'
+          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
+          channelId: live
+          projectId: '${{ secrets.FIREBASE_PROJECT_ID || "hiiii-72d78" }}'
+        env:
+          FIREBASE_CLI_PREVIEWS: hostingchannels

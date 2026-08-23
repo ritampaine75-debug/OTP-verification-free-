@@ -1,0 +1,14 @@
+{
+  "rules": {
+    "otpVerifications": {
+      ".read": false,
+      ".write": false
+    },
+    "verifiedUsers": {
+      ".read": "auth != null",
+      ".write": false
+    },
+    ".read": false,
+    ".write": false
+  }
+}
