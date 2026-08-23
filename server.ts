@@ -18,7 +18,7 @@ import {
   updateOtpInFirebase,
   invalidatePreviousOtpsForEmail,
   sendOtpEmail
-} from './src/server/otpEngine.js';
+} from './src/server/otpEngine';
 
 dotenv.config();
 
