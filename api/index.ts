@@ -3,11 +3,15 @@ import statusHandler from './status';
 import sendHandler from './otp/send';
 import verifyHandler from './otp/verify';
 import resendHandler from './otp/resend';
+import checkHandler from './check';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const url = req.url || '';
 
+    if (url.includes('/api/check') || url.endsWith('/check')) {
+      return checkHandler(req, res);
+    }
     if (url.includes('/api/status') || url.endsWith('/status')) {
       return statusHandler(req, res);
     }

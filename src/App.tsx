@@ -2,9 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { EmailForm } from './components/EmailForm';
 import { OtpForm } from './components/OtpForm';
 import { VerificationStatus } from './components/VerificationStatus';
-import { Shield, KeyRound, Server, CheckCircle2, Info, ExternalLink } from 'lucide-react';
+import { DiagnosticsPage } from './components/DiagnosticsPage';
+import { Shield, KeyRound, Server, CheckCircle2, Info, ExternalLink, Activity } from 'lucide-react';
 
 export default function App() {
+  const [currentPath, setCurrentPath] = useState<'app' | 'check'>(() => {
+    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/check')) {
+      return 'check';
+    }
+    return 'app';
+  });
+
   const [step, setStep] = useState<'email' | 'otp' | 'verified'>('email');
   const [email, setEmail] = useState<string>('');
   const [verificationId, setVerificationId] = useState<string>('');
@@ -16,6 +24,28 @@ export default function App() {
   const [verifiedAt, setVerifiedAt] = useState<number>(0);
   const [smtpStatus, setSmtpStatus] = useState<{ gmailConfigured: boolean; senderEmail: string | null } | null>(null);
   const [showConfigGuide, setShowConfigGuide] = useState<boolean>(false);
+
+  // Sync browser popstate (back/forward button)
+  useEffect(() => {
+    const handlePopState = () => {
+      if (window.location.pathname.startsWith('/check')) {
+        setCurrentPath('check');
+      } else {
+        setCurrentPath('app');
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigateTo = (path: 'app' | 'check') => {
+    setCurrentPath(path);
+    if (typeof window !== 'undefined') {
+      const targetUrl = path === 'check' ? '/check' : '/';
+      window.history.pushState({}, '', targetUrl);
+    }
+  };
 
   // Check system & SMTP status on mount
   useEffect(() => {
@@ -240,6 +270,11 @@ export default function App() {
     setVerifiedAt(0);
   };
 
+  // If on /check, render full Diagnostics Suite
+  if (currentPath === 'check') {
+    return <DiagnosticsPage onBackToApp={() => navigateTo('app')} />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col justify-between selection:bg-blue-500 selection:text-white">
       {/* Top Navbar */}
@@ -261,12 +296,22 @@ export default function App() {
 
           <div className="flex items-center gap-2">
             <button
+              id="open-check-button"
+              type="button"
+              onClick={() => navigateTo('check')}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 hover:text-blue-600 transition"
+            >
+              <Activity className="h-3.5 w-3.5 text-blue-600" />
+              <span>Diagnostics (/check)</span>
+            </button>
+
+            <button
               id="toggle-guide-button"
               type="button"
               onClick={() => setShowConfigGuide(!showConfigGuide)}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 transition"
             >
-              <Info className="h-3.5 w-3.5 text-blue-600" />
+              <Info className="h-3.5 w-3.5 text-slate-600" />
               <span>Setup Guide</span>
             </button>
           </div>
