@@ -42,10 +42,16 @@ export default function App() {
         body: JSON.stringify({ email: targetEmail })
       });
 
-      const data = await response.json();
+      let data: any = null;
+      try {
+        data = await response.json();
+      } catch {
+        const text = await response.text().catch(() => '');
+        throw new Error(`Server returned ${response.status}: ${text || 'Invalid JSON response'}`);
+      }
 
-      if (!response.ok || !data.success) {
-        setError(data.message || 'Failed to send verification code.');
+      if (!response.ok || !data?.success) {
+        setError(data?.message || `Failed to send verification code (Status ${response.status}).`);
         return;
       }
 
@@ -56,7 +62,7 @@ export default function App() {
       setStep('otp');
     } catch (err: any) {
       console.error('Send OTP error:', err);
-      setError('Network or server error. Please try again.');
+      setError(err.message || 'Network or server error. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -78,10 +84,16 @@ export default function App() {
         })
       });
 
-      const data = await response.json();
+      let data: any = null;
+      try {
+        data = await response.json();
+      } catch {
+        const text = await response.text().catch(() => '');
+        throw new Error(`Server returned ${response.status}: ${text || 'Invalid JSON response'}`);
+      }
 
-      if (!response.ok || !data.success) {
-        setError(data.message || 'Verification failed. Please check the code and try again.');
+      if (!response.ok || !data?.success) {
+        setError(data?.message || 'Verification failed. Please check the code and try again.');
         return;
       }
 
@@ -89,7 +101,7 @@ export default function App() {
       setStep('verified');
     } catch (err: any) {
       console.error('Verify OTP error:', err);
-      setError('An error occurred during verification. Please try again.');
+      setError(err.message || 'An error occurred during verification. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -110,10 +122,16 @@ export default function App() {
         })
       });
 
-      const data = await response.json();
+      let data: any = null;
+      try {
+        data = await response.json();
+      } catch {
+        const text = await response.text().catch(() => '');
+        throw new Error(`Server returned ${response.status}: ${text || 'Invalid JSON response'}`);
+      }
 
-      if (!response.ok || !data.success) {
-        setError(data.message || 'Unable to resend code at this time.');
+      if (!response.ok || !data?.success) {
+        setError(data?.message || 'Unable to resend code at this time.');
         return;
       }
 
@@ -122,7 +140,7 @@ export default function App() {
       setDemoOtp(data.demoOtp);
     } catch (err: any) {
       console.error('Resend OTP error:', err);
-      setError('Could not resend verification code. Please try again.');
+      setError(err.message || 'Could not resend verification code. Please try again.');
     } finally {
       setIsResending(false);
     }
