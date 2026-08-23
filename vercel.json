@@ -1,4 +1,30 @@
 {
   "buildCommand": "vite build",
-  "outputDirectory": "dist"
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/api/status",
+      "destination": "/api/status.ts"
+    },
+    {
+      "source": "/api/check",
+      "destination": "/api/check.ts"
+    },
+    {
+      "source": "/api/otp/send",
+      "destination": "/api/otp/send.ts"
+    },
+    {
+      "source": "/api/otp/verify",
+      "destination": "/api/otp/verify.ts"
+    },
+    {
+      "source": "/api/otp/resend",
+      "destination": "/api/otp/resend.ts"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ]
 }
