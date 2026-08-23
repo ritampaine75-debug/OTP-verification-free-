@@ -1,24 +1,37 @@
 # React + Firebase Gmail OTP Verification System
 
-A secure, production-ready Gmail OTP verification system built with **React**, **Vite**, **Firebase Realtime Database**, and a **server-side Node.js / Nodemailer** email engine.
+A production-ready Gmail OTP verification system built with **React**, **Vite**, **Firebase Realtime Database**, and a **server-side Node.js / Nodemailer** email engine. Designed to build and deploy seamlessly on **Vercel**, **Cloud Run**, and **GitHub**.
 
 ---
 
-## 🔒 Security Architecture
+## ⚡ Direct Configuration & Secrets
 
-- **Server-Side Cryptographic Hashing**: OTPs are generated on the server (`crypto.randomInt`) and stored exclusively as salted **SHA-256 hashes**. Plaintext OTPs are never stored in Firebase.
+- **Sender Gmail Address**: `manasipaine@gmail.com` (directly configured in server logic)
+- **Firebase Realtime Database**: `https://hiiii-72d78-default-rtdb.firebaseio.com` (directly configured in client & server)
+- **Only Required Secret / Environment Variable**: `GMAIL_APP_PASSWORD`
+
+No other environment variables are required.
+
+---
+
+## 🔒 Security Architecture (Handled Server-Side)
+
+All OTP security logic is strictly enforced server-side:
+
+- **Cryptographic Hashing (SHA-256)**: Generated 6-digit OTPs are salted and hashed on the server before storing in Firebase Realtime Database. Plaintext codes are never stored.
 - **5-Minute Expiration**: Every code expires in 300 seconds. Backend strictly checks timestamps.
 - **One-Time Usage**: Upon successful verification, the temporary verification record in Firebase Realtime Database is immediately deleted. The same code cannot be used twice.
 - **Attempt Limiting (Brute-Force Protection)**: Maximum 5 verification attempts per session. After 5 incorrect attempts, the record is locked and purged.
 - **Resend Protection**: 60-second cooldown timer between resend requests. Previous OTPs are immediately invalidated when a new code is requested.
-- **Protected Secrets**: Client-side React code contains zero private server keys, zero SMTP credentials, and zero Google App Passwords.
+- **Protected Secrets**: Client-side React code contains zero private server keys and zero Google App Passwords.
 
 ---
 
 ## 📂 Project Structure
 
 ```
-otp-verification/
+├── api/                        # Vercel Serverless Function handler
+│   └── index.ts                # API router for Vercel (/api/status, /api/otp/*)
 │
 ├── src/
 │   ├── components/
@@ -30,143 +43,74 @@ otp-verification/
 │   ├── firebase/
 │   │   └── firebaseConfig.ts   # Public client Firebase configuration
 │   │
+│   ├── server/
+│   │   └── otpEngine.ts        # Shared server-side OTP hashing & email logic
+│   │
 │   ├── App.tsx                 # Main application state & view router
 │   ├── main.tsx                # React DOM entrypoint
 │   └── index.css               # Tailwind CSS styling
 │
-├── functions/                  # Firebase Cloud Functions (optional deployment)
-│   ├── index.js                # Serverless HTTPS endpoints
-│   ├── package.json
-│   └── .env.example
-│
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml          # GitHub Actions automated build & deploy
+│       └── deploy.yml          # GitHub Actions automated build
 │
-├── server.ts                   # Express server with Vite middleware & API routes
-├── firebase.json               # Firebase hosting & database configuration
-├── database.rules.json         # Firebase Realtime Database security rules
+├── server.ts                   # Express server for local dev & container runs
+├── vercel.json                 # Vercel deployment configuration & routing
+├── database.rules.json         # Firebase Realtime Database rules
+├── index.html                  # Root entry module
 ├── package.json
 ├── vite.config.ts
 ├── .gitignore
 ├── README.md
-└── .env.example                # Template for environment variables
+└── .env.example
 ```
 
 ---
 
-## 🚀 Setup & Installation Guide
+## 🚀 Deployment on Vercel
+
+1. Import the repository in [Vercel](https://vercel.com).
+2. Framework Preset: **Vite** (detected automatically).
+3. Build Command: `npm run build` or `vite build`.
+4. Output Directory: `dist`.
+5. Under **Environment Variables**, add:
+   - `GMAIL_APP_PASSWORD`: Your 16-character Google App Password.
+6. Click **Deploy**. Both the React frontend and `/api/*` serverless backend work out of the box.
+
+---
+
+## 🛠️ Setup & Local Development
 
 ### 1. Install Dependencies
-
 ```bash
 npm install
 ```
 
-### 2. Configure Environment Variables
-
-Copy `.env.example` to `.env`:
-
-```bash
-cp .env.example .env
-```
-
-Fill in the required server environment variables:
-
+### 2. Configure Environment Variable
+Create a `.env` file with your Google App Password:
 ```env
-# Gmail SMTP Credentials
-GMAIL_USER="your-email@gmail.com"
-GMAIL_APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"
-
-# Firebase Realtime Database URL
-FIREBASE_DATABASE_URL="https://hiiii-72d78-default-rtdb.firebaseio.com"
-
-# Secret Salt for SHA-256 Hashing
-OTP_SECRET_SALT="your-cryptographic-salt-key"
+GMAIL_APP_PASSWORD="your-16-char-app-password"
 ```
 
-> ⚠️ **CRITICAL**: Never commit your `.env` file to source control.
-
----
-
-### 3. Gmail 2-Step Verification & Google App Password
-
-To allow the server to securely dispatch verification emails via Gmail SMTP:
-
-1. Open your [Google Account Security Settings](https://myaccount.google.com/security).
+#### How to Generate a Google App Password:
+1. Open [Google Account Security](https://myaccount.google.com/security).
 2. Ensure **2-Step Verification** is turned **ON**.
-3. In the search bar at the top of the Google Account page, search for **"App passwords"**.
-4. Create a new App Password (e.g. named `OTP Verification System`).
-5. Copy the generated 16-character password (e.g., `abcd efgh ijkl mnop`).
-6. Place this into `GMAIL_APP_PASSWORD` in your `.env` file (without spaces).
+3. In the search bar at the top of your Google Account page, search for **"App passwords"**.
+4. Create an App Password (named `OTP Verification System`).
+5. Copy the 16-character password into `GMAIL_APP_PASSWORD` in `.env` (or Vercel / GitHub Secrets).
 
 ---
 
-### 4. Firebase Realtime Database Setup & Security Rules
-
-1. Go to the [Firebase Console](https://console.firebase.google.com/).
-2. Select your project (e.g. `hiiii-72d78`).
-3. Navigate to **Build &gt; Realtime Database**.
-4. In the **Rules** tab, deploy the rules defined in `database.rules.json`:
-
-```json
-{
-  "rules": {
-    "otpVerifications": {
-      ".read": false,
-      ".write": false
-    },
-    "verifiedUsers": {
-      ".read": "auth != null",
-      ".write": false
-    },
-    ".read": false,
-    ".write": false
-  }
-}
-```
-
-This prevents any client-side unauthorized reads or writes to the OTP verification cache.
-
----
-
-### 5. Local Development
-
-Start the development server:
-
+### 3. Run Locally
 ```bash
 npm run dev
 ```
-
 The application runs on `http://localhost:3000`.
 
 ---
 
-### 6. GitHub Secrets & CI/CD Deployment
-
-To configure automated builds with GitHub Actions:
-
-1. Push this repository to GitHub.
-2. In your GitHub repository, navigate to **Settings &gt; Secrets and variables &gt; Actions**.
-3. Add the following repository secrets:
-   - `GMAIL_USER`
-   - `GMAIL_APP_PASSWORD`
-   - `FIREBASE_PROJECT_ID`
-   - `FIREBASE_SERVICE_ACCOUNT` (or `FIREBASE_TOKEN`)
-4. The workflow in `.github/workflows/deploy.yml` will automatically build and deploy the application on push to `main`.
-
----
-
-### 7. Production Build
-
-To build the static frontend bundle:
-
+### 4. Build for Production
 ```bash
 npm run build
 ```
-
-To run the production Node.js server:
-
-```bash
-npm start
-```
+Generates production-ready static assets in `dist/`.
