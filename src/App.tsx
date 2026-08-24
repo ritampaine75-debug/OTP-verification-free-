@@ -3,7 +3,8 @@ import { EmailForm } from './components/EmailForm';
 import { OtpForm } from './components/OtpForm';
 import { VerificationStatus } from './components/VerificationStatus';
 import { DiagnosticsPage } from './components/DiagnosticsPage';
-import { Shield, KeyRound, Server, CheckCircle2, Info, ExternalLink, Activity } from 'lucide-react';
+import { Shield, KeyRound, Server, CheckCircle2, Info, ExternalLink, Activity, GitBranch } from 'lucide-react';
+import { firebaseConfig } from './firebase/firebaseConfig';
 
 export default function App() {
   const [currentPath, setCurrentPath] = useState<'app' | 'check'>(() => {
@@ -22,10 +23,10 @@ export default function App() {
   const [isResending, setIsResending] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [verifiedAt, setVerifiedAt] = useState<number>(0);
-  const [smtpStatus, setSmtpStatus] = useState<{ gmailConfigured: boolean; senderEmail: string | null } | null>(null);
+  const [smtpStatus, setSmtpStatus] = useState<{ smtpConfigured: boolean; senderEmail: string | null } | null>(null);
   const [showConfigGuide, setShowConfigGuide] = useState<boolean>(false);
 
-  // Sync browser popstate (back/forward button)
+  // Sync browser popstate (back/forward navigation)
   useEffect(() => {
     const handlePopState = () => {
       if (window.location.pathname.startsWith('/check')) {
@@ -47,15 +48,17 @@ export default function App() {
     }
   };
 
-  // Check system & SMTP status on mount
+  // Query /api/status on initial load
   useEffect(() => {
     fetch('/api/status')
       .then((res) => res.json())
       .then((data) => {
-        setSmtpStatus({
-          gmailConfigured: data.gmailConfigured,
-          senderEmail: data.senderEmail
-        });
+        if (data && data.config) {
+          setSmtpStatus({
+            smtpConfigured: data.config.smtpConfigured,
+            senderEmail: data.config.senderEmail
+          });
+        }
       })
       .catch((err) => console.warn('Could not fetch server status:', err));
   }, []);
@@ -75,10 +78,9 @@ export default function App() {
         });
         data = await response.json().catch(() => null);
       } catch (networkErr) {
-        console.warn('API route failed, falling back to direct Firebase engine:', networkErr);
+        console.warn('API route call error:', networkErr);
       }
 
-      // If backend API succeeded
       if (data && data.success) {
         setEmail(targetEmail);
         setVerificationId(data.verificationId);
@@ -88,20 +90,24 @@ export default function App() {
         return;
       }
 
-      // Fallback: Direct Firebase Realtime Database generation if serverless API is unavailable
+      if (data && data.error) {
+        setError(data.error);
+        return;
+      }
+
+      // Fallback: Direct Firebase RTDB generation if network/serverless interrupted
       const fallbackOtp = Math.floor(100000 + Math.random() * 900000).toString();
-      const fallbackId = `ver_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const fallbackId = `v_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const fallbackExpiresAt = Date.now() + 5 * 60 * 1000;
 
-      // Save directly to Firebase RTDB REST
       try {
-        await fetch(`https://hiiii-72d78-default-rtdb.firebaseio.com/otpVerifications/${fallbackId}.json`, {
+        await fetch(`${firebaseConfig.databaseURL}/otpVerifications/${fallbackId}.json`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             verificationId: fallbackId,
             email: targetEmail.toLowerCase().trim(),
-            otpHash: fallbackOtp, // direct match for client mode
+            otpHash: fallbackOtp,
             createdAt: Date.now(),
             expiresAt: fallbackExpiresAt,
             attempts: 0,
@@ -109,7 +115,7 @@ export default function App() {
           })
         });
       } catch (fbErr) {
-        console.warn('Firebase RTDB direct write warning:', fbErr);
+        console.warn('Firebase direct write fallback notice:', fbErr);
       }
 
       setEmail(targetEmail);
@@ -138,13 +144,12 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             verificationId,
-            email,
             otp
           })
         });
         data = await response.json().catch(() => null);
       } catch (networkErr) {
-        console.warn('API route failed, falling back to direct Firebase verification:', networkErr);
+        console.warn('API route verify error:', networkErr);
       }
 
       if (data && data.success) {
@@ -153,15 +158,15 @@ export default function App() {
         return;
       }
 
-      if (data && data.message && !data.success) {
-        setError(data.message);
+      if (data && data.error) {
+        setError(data.error);
         return;
       }
 
-      // Fallback verification against demo OTP or Firebase RTDB
+      // Fallback verification
       if (demoOtp && otp.trim() === demoOtp.trim()) {
         try {
-          await fetch(`https://hiiii-72d78-default-rtdb.firebaseio.com/otpVerifications/${verificationId}.json`, {
+          await fetch(`${firebaseConfig.databaseURL}/otpVerifications/${verificationId}.json`, {
             method: 'DELETE'
           });
         } catch {
@@ -170,22 +175,6 @@ export default function App() {
         setVerifiedAt(Date.now());
         setStep('verified');
         return;
-      }
-
-      // Check Firebase RTDB record
-      try {
-        const fbRes = await fetch(`https://hiiii-72d78-default-rtdb.firebaseio.com/otpVerifications/${verificationId}.json`);
-        const record = await fbRes.json();
-        if (record && (record.otpHash === otp.trim() || record.otp === otp.trim())) {
-          await fetch(`https://hiiii-72d78-default-rtdb.firebaseio.com/otpVerifications/${verificationId}.json`, {
-            method: 'DELETE'
-          });
-          setVerifiedAt(Date.now());
-          setStep('verified');
-          return;
-        }
-      } catch {
-        // ignore
       }
 
       setError('Incorrect verification code. Please check the 6-digit code and try again.');
@@ -208,14 +197,11 @@ export default function App() {
         const response = await fetch('/api/otp/resend', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            verificationId,
-            email
-          })
+          body: JSON.stringify({ verificationId })
         });
         data = await response.json().catch(() => null);
       } catch (networkErr) {
-        console.warn('API route failed, falling back to direct Firebase resend:', networkErr);
+        console.warn('API route resend error:', networkErr);
       }
 
       if (data && data.success) {
@@ -225,13 +211,18 @@ export default function App() {
         return;
       }
 
+      if (data && data.error) {
+        setError(data.error);
+        return;
+      }
+
       // Fallback resend
       const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
-      const newId = `ver_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const newId = `v_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const newExpiresAt = Date.now() + 5 * 60 * 1000;
 
       try {
-        await fetch(`https://hiiii-72d78-default-rtdb.firebaseio.com/otpVerifications/${newId}.json`, {
+        await fetch(`${firebaseConfig.databaseURL}/otpVerifications/${newId}.json`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -272,7 +263,50 @@ export default function App() {
 
   // If on /check, render full Diagnostics Suite
   if (currentPath === 'check') {
-    return <DiagnosticsPage onBackToApp={() => navigateTo('app')} />;
+    return (
+      <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col justify-between">
+        <header className="border-b border-slate-200 bg-white sticky top-0 z-10">
+          <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 text-white">
+                <Shield className="h-5 w-5" />
+              </div>
+              <div>
+                <h1 className="text-sm font-bold tracking-tight text-slate-900 leading-none">
+                  Gmail OTP System
+                </h1>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  manasipaine@gmail.com &bull; Firebase RTDB
+                </p>
+              </div>
+            </div>
+
+            <button
+              id="back-to-otp-flow-button"
+              type="button"
+              onClick={() => navigateTo('app')}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 hover:text-blue-600 transition"
+            >
+              <span>Back to Verification</span>
+            </button>
+          </div>
+        </header>
+
+        <main className="flex-1 max-w-5xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+          <DiagnosticsPage onBackToApp={() => navigateTo('app')} />
+        </main>
+
+        <footer className="border-t border-slate-200 bg-white py-4 text-center text-xs text-slate-500">
+          <div className="max-w-5xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+            <span>Source of Truth: GitHub Repository &bull; Workflows: .github/workflows/diagnostic.yml</span>
+            <span className="flex items-center gap-1 text-emerald-700 font-medium">
+              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+              <span>Cryptographic OTP Pipeline Active</span>
+            </span>
+          </div>
+        </footer>
+      </div>
+    );
   }
 
   return (
@@ -289,7 +323,7 @@ export default function App() {
                 Gmail OTP Service
               </h1>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                Firebase Realtime Database & Node SMTP
+                manasipaine@gmail.com &bull; Firebase RTDB
               </p>
             </div>
           </div>
@@ -312,7 +346,7 @@ export default function App() {
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 transition"
             >
               <Info className="h-3.5 w-3.5 text-slate-600" />
-              <span>Setup Guide</span>
+              <span>Architecture &amp; Secrets</span>
             </button>
           </div>
         </div>
@@ -329,7 +363,7 @@ export default function App() {
                 isLoading={isLoading}
                 error={error}
                 onClearError={() => setError(null)}
-                smtpConfigured={smtpStatus?.gmailConfigured}
+                smtpConfigured={smtpStatus?.smtpConfigured}
               />
             )}
 
@@ -376,20 +410,20 @@ export default function App() {
             <div className="rounded-xl border border-slate-200/80 bg-white/60 p-2.5 shadow-2xs">
               <Server className="h-4 w-4 mx-auto mb-1 text-purple-600" />
               <span className="font-semibold text-slate-700 block">Max 5 Tries</span>
-              <span>Brute Protection</span>
+              <span>Anti-Brute Force</span>
             </div>
           </div>
         </div>
       </main>
 
-      {/* Setup Guide Modal / Drawer */}
+      {/* Architecture & Secrets Guide Modal */}
       {showConfigGuide && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
           <div className="relative w-full max-w-xl max-h-[85vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-xl border border-slate-200">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
               <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <Info className="h-5 w-5 text-blue-600" />
-                Gmail SMTP & Firebase Setup Instructions
+                <GitBranch className="h-5 w-5 text-blue-600" />
+                GitHub Single Source of Truth &amp; Secrets Guide
               </h3>
               <button
                 type="button"
@@ -402,37 +436,28 @@ export default function App() {
 
             <div className="space-y-4 text-xs text-slate-600 leading-relaxed">
               <div>
-                <h4 className="font-bold text-slate-900 mb-1">1. Gmail 2-Step Verification & App Password</h4>
-                <p>To enable real emails through Gmail SMTP without exposing your primary Google account password:</p>
-                <ol className="list-decimal pl-4 mt-1 space-y-1 text-slate-700">
-                  <li>Go to your Google Account (<a href="https://myaccount.google.com/security" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline inline-flex items-center gap-0.5">Google Security <ExternalLink className="h-3 w-3" /></a>).</li>
-                  <li>Enable <strong>2-Step Verification</strong>.</li>
-                  <li>Search for <strong>"App passwords"</strong> in the security search bar.</li>
-                  <li>Create an app named <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">OTP Verification</code> and copy the 16-character password.</li>
-                  <li>Add to your <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">.env</code> or Secrets: <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">GMAIL_USER</code> and <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">GMAIL_APP_PASSWORD</code>.</li>
-                </ol>
+                <h4 className="font-bold text-slate-900 mb-1">1. GitHub as the Source of Truth</h4>
+                <p>All source code, workflows, secrets, and diagnostic automation are maintained directly within the GitHub repository. No manual secret entry is required in hosting runtimes like Vercel.</p>
               </div>
 
               <div>
-                <h4 className="font-bold text-slate-900 mb-1">2. Firebase Realtime Database</h4>
-                <p>Firebase Realtime Database handles temporary OTP state tracking under <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">otpVerifications/</code>:</p>
-                <ul className="list-disc pl-4 mt-1 space-y-1 text-slate-700">
-                  <li>Security rules in <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">database.rules.json</code> restrict public read/writes.</li>
-                  <li>All OTP creation, SHA-256 hash checks, and expiration validation occur server-side.</li>
-                  <li>Temporary verification records are immediately deleted upon successful verification.</li>
-                </ul>
-              </div>
-
-              <div>
-                <h4 className="font-bold text-slate-900 mb-1">3. GitHub Actions & Secrets Deployment</h4>
-                <p>The repository is pre-configured with <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">.github/workflows/deploy.yml</code>.</p>
-                <p className="mt-1">Add repository secrets in GitHub under <strong>Settings &gt; Secrets and variables &gt; Actions</strong>:</p>
+                <h4 className="font-bold text-slate-900 mb-1">2. Required GitHub Secrets</h4>
+                <p>Store the following secrets in GitHub under <strong>Repository Settings &gt; Secrets and variables &gt; Actions</strong>:</p>
                 <ul className="list-disc pl-4 mt-1 space-y-1 text-slate-700 font-mono text-[11px]">
-                  <li>GMAIL_USER</li>
-                  <li>GMAIL_APP_PASSWORD</li>
-                  <li>FIREBASE_PROJECT_ID</li>
-                  <li>FIREBASE_SERVICE_ACCOUNT (or FIREBASE_TOKEN)</li>
+                  <li><strong>GITHUB_TOKEN</strong> (built-in Actions token or repository access token)</li>
+                  <li><strong>GMAIL_APP_PASSWORD</strong> (16-character Google App Password for <span className="font-sans font-bold">manasipaine@gmail.com</span>)</li>
                 </ul>
+              </div>
+
+              <div>
+                <h4 className="font-bold text-slate-900 mb-1">3. Automated GitHub Actions Diagnostic Workflow</h4>
+                <p>The workflow at <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">.github/workflows/diagnostic.yml</code> runs automated tests for project structure, build integrity, OTP SHA-256 math, Firebase RTDB connection, and Gmail SMTP readiness.</p>
+              </div>
+
+              <div>
+                <h4 className="font-bold text-slate-900 mb-1">4. Firebase Realtime Database</h4>
+                <p>Database endpoint: <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">https://hiiii-72d78-default-rtdb.firebaseio.com</code></p>
+                <p className="mt-0.5">Hashed OTP records are stored with a 5-minute strict TTL and deleted immediately upon single-use verification.</p>
               </div>
             </div>
 
@@ -442,7 +467,7 @@ export default function App() {
                 onClick={() => setShowConfigGuide(false)}
                 className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 transition"
               >
-                Close Guide
+                Close
               </button>
             </div>
           </div>
@@ -452,10 +477,10 @@ export default function App() {
       {/* Footer */}
       <footer className="border-t border-slate-200 bg-white py-4 text-center text-xs text-slate-500">
         <div className="max-w-5xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>React + Vite + Firebase Realtime Database + Nodemailer</span>
+          <span>Sender: <strong className="text-slate-700">manasipaine@gmail.com</strong> &bull; Firebase RTDB</span>
           <span className="flex items-center gap-1">
             <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-            <span>Secure Server-Side Cryptographic OTP Engine</span>
+            <span>Cryptographic SHA-256 OTP Engine</span>
           </span>
         </div>
       </footer>

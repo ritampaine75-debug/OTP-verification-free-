@@ -1,41 +1,33 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import {
-  SENDER_GMAIL,
-  OTP_EXPIRY_MS,
-  MAX_ATTEMPTS,
-  RESEND_COOLDOWN_MS,
-  FIREBASE_DATABASE_URL
-} from './_utils';
+import { SENDER_GMAIL, FIREBASE_DATABASE_URL } from './_utils.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  try {
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Content-Type', 'application/json');
+  // CORS configuration
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
-    if (req.method === 'OPTIONS') {
-      return res.status(200).end();
-    }
-
-    const isGmailConfigured = Boolean(process.env.GMAIL_APP_PASSWORD && process.env.GMAIL_APP_PASSWORD.trim().length > 0);
-
-    return res.status(200).json({
-      status: 'online',
-      gmailConfigured: isGmailConfigured,
-      senderEmail: SENDER_GMAIL,
-      databaseUrl: FIREBASE_DATABASE_URL,
-      otpExpirySeconds: OTP_EXPIRY_MS / 1000,
-      maxAttempts: MAX_ATTEMPTS,
-      resendCooldownSeconds: RESEND_COOLDOWN_MS / 1000
-    });
-  } catch (error: any) {
-    return res.status(200).json({
-      status: 'online',
-      gmailConfigured: false,
-      senderEmail: SENDER_GMAIL,
-      error: error?.message
-    });
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
   }
+
+  const hasAppPassword = !!process.env.GMAIL_APP_PASSWORD?.trim();
+  const hasGitHubToken = !!(process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim());
+
+  return res.status(200).json({
+    status: 'ok',
+    service: 'Gmail OTP Verification API',
+    version: '2.0.0',
+    timestamp: new Date().toISOString(),
+    config: {
+      senderEmail: SENDER_GMAIL,
+      firebaseDatabaseUrl: FIREBASE_DATABASE_URL,
+      otpExpirySeconds: 300,
+      maxAttempts: 5,
+      resendCooldownSeconds: 60,
+      smtpConfigured: hasAppPassword,
+      gitHubTokenConfigured: hasGitHubToken,
+      environment: process.env.NODE_ENV || 'development'
+    }
+  });
 }

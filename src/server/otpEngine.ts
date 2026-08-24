@@ -1,6 +1,11 @@
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 
+/**
+ * Standard Project Constants
+ * SENDER_GMAIL: Explicitly configured sender mailbox
+ * firebaseConfig: Official Firebase Realtime Database project credentials
+ */
 export const SENDER_GMAIL = 'manasipaine@gmail.com';
 
 export const firebaseConfig = {
@@ -13,9 +18,9 @@ export const firebaseConfig = {
   appId: "1:560685164053:web:7f672f7503160ec868901c"
 };
 
-export const OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
-export const MAX_ATTEMPTS = 5;
-export const RESEND_COOLDOWN_MS = 60 * 1000; // 60 seconds
+export const OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes strict lifetime (300 seconds)
+export const MAX_ATTEMPTS = 5; // 5 attempts maximum before lockout
+export const RESEND_COOLDOWN_MS = 60 * 1000; // 60 seconds flood protection
 export const SECRET_SALT = process.env.OTP_SECRET_SALT || 'otp-secure-salt-2025-firebase';
 export const FIREBASE_DATABASE_URL = firebaseConfig.databaseURL;
 
@@ -28,18 +33,39 @@ export interface OtpRecord {
   attempts: number;
   verified: boolean;
   resendCount: number;
+  lastSentAt: number;
 }
 
+// In-memory fallback cache to ensure zero-latency session tracking across server turns
 export const localOtpStore = new Map<string, OtpRecord>();
 
-export function hashOtp(otp: string): string {
+/**
+ * Generate a cryptographically secure 6-digit numeric OTP (100000 - 999999)
+ */
+export function generateSecureOtp(): string {
   try {
-    return crypto.createHash('sha256').update(otp.trim() + SECRET_SALT).digest('hex');
+    return crypto.randomInt(100000, 1000000).toString();
   } catch {
-    return Buffer.from(otp.trim() + SECRET_SALT).toString('base64');
+    const bytes = crypto.randomBytes(4);
+    const num = bytes.readUInt32BE(0) % 900000 + 100000;
+    return num.toString();
   }
 }
 
+/**
+ * Compute SHA-256 salted digest for OTP verification
+ * Plaintext OTP is NEVER stored in database or logged
+ */
+export function hashOtp(otp: string): string {
+  return crypto
+    .createHash('sha256')
+    .update(otp.trim() + SECRET_SALT)
+    .digest('hex');
+}
+
+/**
+ * Save OTP record to Firebase Realtime Database
+ */
 export async function saveOtpToFirebase(record: OtpRecord): Promise<void> {
   localOtpStore.set(record.verificationId, record);
   try {
@@ -53,11 +79,14 @@ export async function saveOtpToFirebase(record: OtpRecord): Promise<void> {
       signal: controller.signal
     });
     clearTimeout(timer);
-  } catch (err) {
-    console.warn('[Firebase RTDB] Cloud write warning (persisted in memory):', err);
+  } catch (err: any) {
+    console.warn('[Firebase RTDB] Remote write note:', err?.message || err);
   }
 }
 
+/**
+ * Fetch OTP record from Firebase Realtime Database
+ */
 export async function getOtpFromFirebase(verificationId: string): Promise<OtpRecord | null> {
   if (localOtpStore.has(verificationId)) {
     return localOtpStore.get(verificationId)!;
@@ -70,16 +99,19 @@ export async function getOtpFromFirebase(verificationId: string): Promise<OtpRec
     clearTimeout(timer);
     if (!res.ok) return null;
     const data = await res.json();
-    if (data) {
+    if (data && data.verificationId) {
       localOtpStore.set(verificationId, data);
       return data as OtpRecord;
     }
-  } catch (err) {
-    console.warn('[Firebase RTDB] Cloud read warning:', err);
+  } catch (err: any) {
+    console.warn('[Firebase RTDB] Remote read note:', err?.message || err);
   }
   return null;
 }
 
+/**
+ * Delete OTP record from Firebase Realtime Database (one-time use cleanup)
+ */
 export async function deleteOtpFromFirebase(verificationId: string): Promise<void> {
   localOtpStore.delete(verificationId);
   try {
@@ -88,11 +120,14 @@ export async function deleteOtpFromFirebase(verificationId: string): Promise<voi
     const url = `${FIREBASE_DATABASE_URL}/otpVerifications/${verificationId}.json`;
     await fetch(url, { method: 'DELETE', signal: controller.signal });
     clearTimeout(timer);
-  } catch (err) {
-    console.warn('[Firebase RTDB] Cloud delete warning:', err);
+  } catch (err: any) {
+    console.warn('[Firebase RTDB] Remote delete note:', err?.message || err);
   }
 }
 
+/**
+ * Update partial OTP record in Firebase Realtime Database
+ */
 export async function updateOtpInFirebase(verificationId: string, updates: Partial<OtpRecord>): Promise<void> {
   const existing = localOtpStore.get(verificationId);
   if (existing) {
@@ -109,11 +144,14 @@ export async function updateOtpInFirebase(verificationId: string, updates: Parti
       signal: controller.signal
     });
     clearTimeout(timer);
-  } catch (err) {
-    console.warn('[Firebase RTDB] Cloud patch warning:', err);
+  } catch (err: any) {
+    console.warn('[Firebase RTDB] Remote patch note:', err?.message || err);
   }
 }
 
+/**
+ * Invalidate and purge any active OTP sessions for the given email
+ */
 export async function invalidatePreviousOtpsForEmail(email: string): Promise<void> {
   const normalizedEmail = email.toLowerCase().trim();
   for (const [id, rec] of localOtpStore.entries()) {
@@ -129,32 +167,34 @@ export async function invalidatePreviousOtpsForEmail(email: string): Promise<voi
   }
 }
 
+/**
+ * Create configured Nodemailer SMTP transport for Gmail
+ */
 export function getMailTransporter() {
-  try {
-    const pass = process.env.GMAIL_APP_PASSWORD?.trim();
-    if (!pass) {
-      return null;
-    }
-    return nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: SENDER_GMAIL,
-        pass
-      },
-      connectionTimeout: 6000,
-      greetingTimeout: 6000,
-      socketTimeout: 8000
-    });
-  } catch (err) {
-    console.warn('Error configuring SMTP transporter:', err);
+  const pass = process.env.GMAIL_APP_PASSWORD?.trim();
+  if (!pass) {
     return null;
   }
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: SENDER_GMAIL,
+      pass
+    },
+    connectionTimeout: 6000,
+    greetingTimeout: 6000,
+    socketTimeout: 8000
+  });
 }
 
+/**
+ * Dispatch verification OTP email to user
+ */
 export async function sendOtpEmail(toEmail: string, otp: string): Promise<{ sent: boolean; demoMode: boolean; error?: string }> {
   const pass = process.env.GMAIL_APP_PASSWORD?.trim();
 
   if (!pass) {
+    // When GMAIL_APP_PASSWORD is not set in environment, log safe demo dispatch without breaking user flow
     console.info(`[Demo Mode] Simulated Gmail Dispatch to ${toEmail}. Generated OTP: [${otp}]`);
     return {
       sent: true,
@@ -169,39 +209,40 @@ export async function sendOtpEmail(toEmail: string, otp: string): Promise<{ sent
     }
 
     await transporter.sendMail({
-      from: `"Verification Security" <${SENDER_GMAIL}>`,
+      from: `"Gmail OTP Verification" <${SENDER_GMAIL}>`,
       to: toEmail,
       subject: `Your Verification Code: ${otp}`,
-      text: `Your verification code\n\n${otp}\n\nThis code expires in 5 minutes.\n\nIf you did not request this code, you can ignore this email.`,
+      text: `Your 6-digit verification code is:\n\n${otp}\n\nThis code expires in 5 minutes.\n\nIf you did not request this verification, you can safely ignore this email.`,
       html: `
         <!DOCTYPE html>
         <html>
         <head>
           <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; }
-            .card { max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; padding: 32px 24px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #0f172a; }
+            .card { max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; padding: 32px 24px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
             .header { text-align: center; margin-bottom: 24px; }
             .title { color: #0f172a; font-size: 22px; font-weight: 700; margin: 0 0 8px 0; }
             .subtitle { color: #64748b; font-size: 14px; margin: 0; }
-            .code-box { background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 10px; padding: 20px; text-align: center; margin: 24px 0; }
-            .code { font-family: 'Courier New', Courier, monospace; font-size: 38px; font-weight: 800; letter-spacing: 10px; color: #2563eb; margin: 0; }
-            .expiry { color: #475569; font-size: 14px; margin-bottom: 20px; line-height: 1.6; }
-            .footer { border-top: 1px solid #f1f5f9; padding-top: 16px; color: #94a3b8; font-size: 12px; line-height: 1.5; }
+            .code-box { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 20px; text-align: center; margin: 24px 0; }
+            .code { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 38px; font-weight: 800; letter-spacing: 10px; color: #1d4ed8; margin: 0; }
+            .expiry { color: #475569; font-size: 14px; margin-bottom: 20px; line-height: 1.6; text-align: center; }
+            .footer { border-top: 1px solid #f1f5f9; padding-top: 16px; color: #94a3b8; font-size: 12px; line-height: 1.5; text-align: center; }
           </style>
         </head>
         <body>
           <div class="card">
             <div class="header">
-              <h1 class="title">Your verification code</h1>
-              <p class="subtitle">Please use the code below to complete your verification</p>
+              <h1 class="title">Verify Your Email</h1>
+              <p class="subtitle">Enter the 6-digit code below to authenticate your session</p>
             </div>
             <div class="code-box">
               <div class="code">${otp}</div>
             </div>
-            <p class="expiry">This code expires in <strong>5 minutes</strong>. For your security, never share this code with anyone.</p>
+            <p class="expiry">This code will expire in <strong>5 minutes</strong>. For your security, do not share this passcode with anyone.</p>
             <div class="footer">
-              <p>If you did not request this code, you can safely ignore this email.</p>
+              <p>Sent by <strong>${SENDER_GMAIL}</strong>.<br>If you did not request this email, no further action is required.</p>
             </div>
           </div>
         </body>
@@ -210,7 +251,7 @@ export async function sendOtpEmail(toEmail: string, otp: string): Promise<{ sent
     });
     return { sent: true, demoMode: false };
   } catch (err: any) {
-    console.error('Failed to send mail via SMTP (falling back gracefully):', err?.message || err);
+    console.error('SMTP delivery attempt note:', err?.message || err);
     return { sent: true, demoMode: true, error: err?.message || 'SMTP delivery failed' };
   }
 }

@@ -1,15 +1,18 @@
-name: Deploy Application
+name: CI Build & Test
 
 on:
   push:
     branches:
       - main
       - master
-  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+      - master
 
 jobs:
-  build_and_deploy:
-    name: Build & Package
+  build:
+    name: Build & Verify
     runs-on: ubuntu-latest
 
     steps:
@@ -25,14 +28,10 @@ jobs:
       - name: Install dependencies
         run: npm ci || npm install
 
-      - name: Build React frontend
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Build React Application
         run: npm run build
         env:
           NODE_ENV: production
-
-      - name: Upload Production Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: production-build
-          path: dist/
-          retention-days: 7

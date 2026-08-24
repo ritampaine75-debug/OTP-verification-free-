@@ -1,87 +1,89 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import crypto from 'crypto';
 import {
-  OTP_EXPIRY_MS,
-  OtpRecord,
+  generateSecureOtp,
   hashOtp,
   saveOtpToFirebase,
-  invalidatePreviousOtpsForEmail,
   sendOtpEmail,
-  parseIncomingBody
-} from '../_utils';
+  OTP_EXPIRY_MS,
+  RESEND_COOLDOWN_MS,
+  SENDER_GMAIL
+} from '../_utils.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
   try {
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Content-Type', 'application/json');
+    const { email } = req.body || {};
 
-    if (req.method === 'OPTIONS') {
-      return res.status(200).end();
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ error: 'Valid email address is required' });
     }
 
-    if (req.method !== 'POST') {
-      return res.status(200).json({ success: false, message: 'Please use POST request.' });
-    }
-
-    const body = parseIncomingBody(req);
-    const email = body?.email;
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const cleanEmail = email.trim().toLowerCase();
 
-    if (!email || !emailRegex.test(String(email).trim())) {
-      return res.status(200).json({
-        success: false,
-        message: 'Please provide a valid email address.'
-      });
+    if (!emailRegex.test(cleanEmail)) {
+      return res.status(400).json({ error: 'Invalid email address format' });
     }
 
-    const normalizedEmail = String(email).trim().toLowerCase();
-    await invalidatePreviousOtpsForEmail(normalizedEmail);
+    // 1. Generate 6-digit cryptographically secure OTP
+    const otp = generateSecureOtp();
+    const verificationId = `v_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
+    const now = Date.now();
+    const expiresAt = now + OTP_EXPIRY_MS; // Strict 5 minutes
 
-    const otp = crypto.randomInt(100000, 1000000).toString();
-    const verificationId = crypto.randomUUID ? crypto.randomUUID() : `ver_${Date.now()}_${Math.random().toString(36).substring(2)}`;
+    // 2. Hash OTP before saving to Firebase Realtime Database
     const otpHash = hashOtp(otp);
-    const createdAt = Date.now();
-    const expiresAt = createdAt + OTP_EXPIRY_MS;
 
-    const record: OtpRecord = {
+    const record = {
       verificationId,
-      email: normalizedEmail,
+      email: cleanEmail,
       otpHash,
-      createdAt,
+      createdAt: now,
       expiresAt,
       attempts: 0,
       verified: false,
-      resendCount: 0
+      resendCount: 0,
+      lastSentAt: now
     };
 
+    // 3. Persist hashed OTP session in Firebase Realtime Database
     await saveOtpToFirebase(record);
-    const emailResult = await sendOtpEmail(normalizedEmail, otp);
+
+    // 4. Send email via Gmail SMTP from manasipaine@gmail.com
+    const emailResult = await sendOtpEmail(cleanEmail, otp);
+
+    const isProduction = !!process.env.GMAIL_APP_PASSWORD?.trim();
 
     return res.status(200).json({
       success: true,
       verificationId,
       expiresAt,
+      resendCooldown: Math.floor(RESEND_COOLDOWN_MS / 1000),
+      senderEmail: SENDER_GMAIL,
       demoMode: emailResult.demoMode,
-      demoOtp: emailResult.demoMode ? otp : undefined,
+      // Only include demo OTP in development/demo mode when SMTP password is not set
+      demoOtp: !isProduction ? otp : undefined,
       message: emailResult.demoMode
-        ? 'Verification code generated (Demo mode active).'
-        : 'A 6-digit verification code has been sent to your Gmail inbox.'
+        ? 'Verification code generated (simulated delivery).'
+        : `Verification code sent to ${cleanEmail}`
     });
   } catch (error: any) {
     console.error('Error in /api/otp/send:', error);
-    // Always return valid JSON and status 200 so the frontend never crashes on Vercel
-    const fallbackOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    const fallbackId = `ver_${Date.now()}`;
-    return res.status(200).json({
-      success: true,
-      verificationId: fallbackId,
-      expiresAt: Date.now() + 300000,
-      demoMode: true,
-      demoOtp: fallbackOtp,
-      message: 'Verification code generated (Test mode fallback).'
+    return res.status(500).json({
+      error: 'Failed to process verification code',
+      message: error?.message
     });
   }
 }

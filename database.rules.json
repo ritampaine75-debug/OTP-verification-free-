@@ -4,6 +4,10 @@
       ".read": false,
       ".write": false
     },
+    "diagnostics": {
+      ".read": true,
+      ".write": true
+    },
     "verifiedUsers": {
       ".read": "auth != null",
       ".write": false
